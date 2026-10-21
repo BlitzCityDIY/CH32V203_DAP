@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>QT Py web programmer</title>
+  <meta name="description" content="Program an STM32F4 from Chrome through an Adafruit QT Py CH32V203 CMSIS-DAP probe, using WebUSB.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='7' y='7' width='18' height='18' rx='2' fill='%231E6E50'/><g fill='%23B07A24'><rect x='3' y='10' width='4' height='2'/><rect x='3' y='15' width='4' height='2'/><rect x='3' y='20' width='4' height='2'/><rect x='25' y='10' width='4' height='2'/><rect x='25' y='15' width='4' height='2'/><rect x='25' y='20' width='4' height='2'/></g></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <main class="page">
+    <header class="masthead">
+      <h1>Program an STM32 from your browser</h1>
+      <p class="lede">Connect an Adafruit QT Py CH32V203 running the <code>cmsis_dap_probe</code> sketch,
+        wire it to your board’s SWD pins, and drop in a firmware file.</p>
+    </header>
+
+    <section class="chain" aria-label="Connection status">
+      <div class="node" id="node-pc" data-state="idle">
+        <span class="node-name">This computer</span>
+        <span class="node-status" id="node-pc-status">Checking WebUSB…</span>
+      </div>
+      <div class="trace" id="link-usb" data-state="idle"><span class="trace-label">USB</span></div>
+      <div class="node" id="node-probe" data-state="idle">
+        <span class="node-name">QT Py</span>
+        <span class="node-status" id="node-probe-status">Not connected</span>
+      </div>
+      <div class="trace" id="link-swd" data-state="idle"><span class="trace-label">SWD</span></div>
+      <div class="node" id="node-target" data-state="idle">
+        <span class="node-name">Target</span>
+        <span class="node-status" id="node-target-status">Unknown</span>
+      </div>
+    </section>
+
+    <div class="notice" id="unsupported" role="alert" hidden></div>
+
+    <ol class="steps">
+      <li class="step" id="step-probe">
+        <h2>Connect the QT Py</h2>
+        <p class="hint">Chrome asks which device to use. Pick the one named QT Py or CMSIS-DAP.</p>
+        <div class="actions">
+          <button type="button" class="btn primary" id="btn-connect">Connect QT Py</button>
+          <button type="button" class="btn" id="btn-disconnect" hidden>Disconnect</button>
+        </div>
+        <dl class="facts" id="probe-facts" hidden></dl>
+        <p class="message" id="probe-message" role="status"></p>
+      </li>
+
+      <li class="step" id="step-target" data-locked="true">
+        <h2>Check the target</h2>
+        <p class="hint">The QT Py reads the chip’s ID over SWD without stopping it.</p>
+        <div class="actions">
+          <button type="button" class="btn primary" id="btn-detect" disabled>Detect target</button>
+          <label class="field inline">
+            <span>SWD clock</span>
+            <select id="sel-clock">
+              <option value="1000000" selected>1 MHz</option>
+              <option value="500000">500 kHz</option>
+              <option value="250000">250 kHz</option>
+              <option value="100000">100 kHz</option>
+            </select>
+          </label>
+        </div>
+        <dl class="facts" id="target-facts" hidden></dl>
+        <p class="message" id="target-message" role="status"></p>
+      </li>
+
+      <li class="step" id="step-firmware" data-locked="true">
+        <h2>Program firmware</h2>
+        <label class="drop" id="drop">
+          <input type="file" id="file" accept=".bin,.hex,.ihex,.ihx,.elf,application/octet-stream">
+          <span class="drop-main">Drop a <code>.bin</code>, <code>.hex</code> or <code>.elf</code> file here</span>
+          <span class="drop-sub">or click to choose one</span>
+        </label>
+
+        <div class="file-card" id="file-card" hidden>
+          <dl class="facts" id="file-facts"></dl>
+          <label class="field" id="bin-address-row" hidden>
+            <span>Load address for this .bin</span>
+            <input type="text" id="bin-address" value="0x08000000" spellcheck="false" autocomplete="off">
+          </label>
+          <p class="message warn" id="file-warning" hidden></p>
+        </div>
+
+        <fieldset class="options">
+          <legend>Options</legend>
+          <label class="check"><input type="checkbox" id="opt-verify" checked> Verify after programming</label>
+          <label class="check"><input type="checkbox" id="opt-run" checked> Start the new firmware when done</label>
+          <label class="check"><input type="checkbox" id="opt-erase-all"> Erase the whole chip first (slower; otherwise only the sectors the image uses)</label>
+        </fieldset>
+
+        <div class="actions">
+          <button type="button" class="btn primary big" id="btn-program" disabled>Program target</button>
+          <button type="button" class="btn" id="btn-cancel" hidden>Cancel</button>
+        </div>
+
+        <div class="progress" id="progress" hidden>
+          <ol class="stages" id="stages">
+            <li data-stage="erase">Erase</li>
+            <li data-stage="program">Program</li>
+            <li data-stage="verify">Verify</li>
+          </ol>
+          <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="bar">
+            <div class="bar-fill" id="bar-fill"></div>
+          </div>
+          <p class="progress-text" id="progress-text"></p>
+        </div>
+        <p class="message" id="program-message" role="status"></p>
+      </li>
+    </ol>
+
+    <details class="tools">
+      <summary>More tools</summary>
+      <p class="hint">These act on the connected target right away.</p>
+      <div class="actions">
+        <button type="button" class="btn" id="btn-backup" disabled>Save flash as .bin</button>
+        <button type="button" class="btn" id="btn-reset" disabled>Reset target</button>
+        <button type="button" class="btn danger" id="btn-mass-erase" disabled>Erase whole chip</button>
+      </div>
+      <p class="message" id="tools-message" role="status"></p>
+    </details>
+
+    <section class="log-panel" aria-label="Log">
+      <div class="log-head">
+        <h2>Log</h2>
+        <button type="button" class="btn small" id="btn-clear-log">Clear</button>
+      </div>
+      <pre class="log" id="log" aria-live="polite"></pre>
+    </section>
+
+    <footer class="help">
+      <h2>Wiring and setup</h2>
+      <div class="help-grid">
+        <div>
+          <h3>QT Py to target</h3>
+          <table class="wiring">
+            <tr><th scope="row">A3 (PA0)</th><td>SWDIO</td></tr>
+            <tr><th scope="row">A2 (PA1)</th><td>SWCLK</td></tr>
+            <tr><th scope="row">GND</th><td>GND</td></tr>
+            <tr><th scope="row">A0 (PB1)</th><td>nRESET (optional)</td></tr>
+          </table>
+          <p>Power the target from its own USB or battery. Keep the SWD wires short.</p>
+        </div>
+        <div>
+          <h3>Requirements</h3>
+          <p>Chrome, Edge or another Chromium browser on a desktop computer. Firefox and Safari don’t support WebUSB.</p>
+          <p>Only one program can use the QT Py at a time: close OpenOCD, pyOCD or other tabs first.</p>
+          <p>On Linux, give your user access to the QT Py with a udev rule (see the README).</p>
+          <p>Targets: STM32F4 family, first 1 MB of flash.</p>
+        </div>
+      </div>
+    </footer>
+  </main>
+</body>
+</html>
