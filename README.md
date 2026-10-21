@@ -1,4 +1,4 @@
-# Adafruit_DAP_CH32
+# CH32V203_DAP
 
 CMSIS-DAP SWD programmer Arduino library for the WCH CH32V203, developed on the
 Adafruit QT Py CH32V203.
