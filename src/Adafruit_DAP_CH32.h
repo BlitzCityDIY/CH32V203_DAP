@@ -32,7 +32,7 @@ public:
     ERR_ALIGN,     //!< address or length not a multiple of 4
   };
 
-  /*! Debug Port register addresses (A[3:2]). DP_REG_: ARM's DAP.h owns DP_*. */
+  /*! Debug Port register addresses (A[3:2]). */
   enum DpReg : uint8_t {
     DP_REG_DPIDR = 0x00,     //!< ID register (read)
     DP_REG_ABORT = 0x00,     //!< abort / clear sticky errors (write)
@@ -67,7 +67,7 @@ public:
   /*! @return Idle cycles inserted after each transfer. */
   uint8_t idleCycles(void) const { return _idle_cycles; }
   bool setClock(uint32_t hz);
-  uint32_t measureClock(bool read_path = false);
+  uint32_t measureClock(void);
 
   bool connect(uint32_t *dpidr = nullptr);
   void disconnect(void);

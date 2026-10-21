@@ -1,11 +1,10 @@
 // Adafruit_DAP_CH32 - SWD wiring and signal diagnostics
 //
+// For when swd_identify_stm32 reports "no ACK" or unreliable results:
 //   1. Line check   - levels the target's pulls give with probe pins floating
 //   2. Drive check  - can the probe drive SWCLK / SWDIO / nRESET?
-//   3. Raw capture  - a hand-built DPIDR read showing every bit received,
-//                     normally and with nRESET held low
-//   4. SWCLK        - requested vs. measured clock (write and read paths)
-//   5. Reliability  - 20 CPUID reads per SWD clock and pin edge speed
+//   3. SWCLK        - requested vs. measured clock
+//   4. Reliability  - 20 CPUID reads per SWD clock and pin edge speed
 //
 // NeoPixel: blue = idle, yellow = running, green = done.
 
@@ -20,20 +19,10 @@
 // CMSIS-DAP command IDs
 static const uint8_t CMD_CONNECT = 0x02;
 static const uint8_t CMD_SWJ_PINS = 0x10;
-static const uint8_t CMD_SWJ_SEQUENCE = 0x12;
-static const uint8_t CMD_SWD_SEQUENCE = 0x1D;
 
 Adafruit_DAP_CH32 dap;
 Adafruit_NeoPixel pixel(1, PA4, NEO_GRB + NEO_KHZ800);
 uint8_t req[64], resp[64];
-
-static void printHex32(uint32_t v) {
-  static const char hex[] = "0123456789ABCDEF";
-  Serial.print("0x");
-  for (int i = 28; i >= 0; i -= 4) {
-    Serial.print(hex[(v >> i) & 0xF]);
-  }
-}
 
 static void lineCheck(void) {
   dap.disconnect(); // probe pins floating
@@ -51,6 +40,8 @@ static void lineCheck(void) {
   Serial.println("/100  (an STM32 pulls SWDIO up and SWCLK down)");
 }
 
+// DAP_SWJ_Pins: drive the selected pins, return the levels read back.
+// Bits: 0 = SWCLK, 1 = SWDIO, 7 = nRESET.
 static uint8_t swjPins(uint8_t value, uint8_t select, uint32_t wait_us) {
   req[0] = CMD_SWJ_PINS;
   req[1] = value;
@@ -89,71 +80,25 @@ static void driveCheck(void) {
   swjPins(0xFF, 0x83, 50000); // leave all pins high / released
 }
 
-static void rawDpidrRead(const char *label) {
-  const uint8_t con[] = {CMD_CONNECT, 1};
-  const uint8_t line_reset[] = {CMD_SWJ_SEQUENCE, 56, 0xFF, 0xFF, 0xFF,
-                                0xFF, 0xFF, 0xFF, 0xFF};
-  const uint8_t to_swd[] = {CMD_SWJ_SEQUENCE, 16, 0x9E, 0xE7};
-  const uint8_t idle[] = {CMD_SWJ_SEQUENCE, 8, 0x00};
-  dap.execute(con, resp);
-  dap.execute(line_reset, resp);
-  dap.execute(to_swd, resp);
-  dap.execute(line_reset, resp);
-  dap.execute(idle, resp);
-
-  const uint8_t raw[] = {CMD_SWD_SEQUENCE, 3, 8, 0xA5, 0x80 | 37, 8, 0x00};
-  dap.execute(raw, resp);
-
-  auto capBit = [](int i) { return (resp[2 + i / 8] >> (i % 8)) & 1; };
-  uint32_t v = 0;
-  int ones = 0;
-  for (int i = 0; i < 32; i++) {
-    v |= (uint32_t)capBit(4 + i) << i;
-    ones += capBit(4 + i);
-  }
-  int ack = capBit(1) | (capBit(2) << 1) | (capBit(3) << 2);
-  Serial.print(label);
-  Serial.print(" ack=");
-  Serial.print(capBit(1));
-  Serial.print(capBit(2));
-  Serial.print(capBit(3));
-  Serial.print(" data=");
-  printHex32(v);
-  Serial.print(" parity=");
-  Serial.print(capBit(36));
-  if (ack == 1 && (ones & 1) == capBit(36)) {
-    Serial.println("  -> OK, valid parity");
-  } else if (ack == 7 && v == 0xFFFFFFFF) {
-    Serial.println("  -> all ones: the target never drove SWDIO");
-  } else if (ack == 0 && v == 0) {
-    Serial.println("  -> all zeros: SWDIO held low (short to GND?)");
-  } else {
-    Serial.println("  -> partial response: timing or signal problem");
-  }
-}
-
 static void clockCheck(void) {
-  Serial.println("4. SWCLK (requested -> measured write / read path):");
+  Serial.println("3. SWCLK (requested -> measured):");
   const uint32_t clocks[] = {100000, 400000, 1000000};
   for (uint32_t hz : clocks) {
     dap.setClock(hz);
-    uint32_t w = dap.measureClock(false);
-    uint32_t r = dap.measureClock(true);
     Serial.print("   ");
     Serial.print(hz / 1000);
     Serial.print(" kHz -> ");
-    Serial.print(w / 1000);
-    Serial.print(" / ");
-    Serial.print(r / 1000);
+    Serial.print(dap.measureClock() / 1000);
     Serial.println(" kHz");
   }
 }
 
+// CPUID reads (CSW write, TAR write, DRW read) per clock and edge speed.
 static void reliabilityMatrix(void) {
   const uint32_t clocks[] = {100000, 400000, 1000000, 2000000};
   const uint8_t edges[] = {10, 2};
   const int tries = 20;
-  Serial.println("5. Reliability: CPUID reads per SWD clock / edge speed:");
+  Serial.println("4. Reliability: CPUID reads per SWD clock / edge speed:");
   for (uint8_t mhz : edges) {
     for (uint32_t hz : clocks) {
       dap.setPinSpeed(mhz);
@@ -219,12 +164,6 @@ static void runDiagnostics(void) {
   dap.setClock(100000);
   lineCheck();
   driveCheck();
-  Serial.println("3. Raw DPIDR read at 100 kHz:");
-  rawDpidrRead("   normal:       ");
-  swjPins(0x00, 0x80, 0); // hold nRESET low
-  delay(20);
-  rawDpidrRead("   under reset:  ");
-  swjPins(0x80, 0x80, 50000);
   clockCheck();
   reliabilityMatrix();
   dap.disconnect();

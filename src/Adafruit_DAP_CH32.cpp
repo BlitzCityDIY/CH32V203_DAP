@@ -3,14 +3,31 @@
  *
  * CMSIS-DAP SWD probe for the WCH CH32V203.
  *
+ * MIT license. The CMSIS-DAP engine in src/engine is BSD-3 (Adafruit_DAP).
  */
 
 #include "Adafruit_DAP_CH32.h"
 
-// Configuration before DAP.h, as in ARM's DAP.c.
-#include "engine/DAP_config.h"
+#include "engine/dap.h"
+#include "engine/dap_ch32_platform.h"
 
-#include "engine/DAP.h"
+// CMSIS-DAP command IDs and response codes (CMSIS-DAP specification)
+static const uint8_t ID_DAP_Connect = 0x02;
+static const uint8_t ID_DAP_Disconnect = 0x03;
+static const uint8_t ID_DAP_TransferConfigure = 0x04;
+static const uint8_t ID_DAP_Transfer = 0x05;
+static const uint8_t ID_DAP_TransferBlock = 0x06;
+static const uint8_t ID_DAP_SWJ_Pins = 0x10;
+static const uint8_t ID_DAP_SWJ_Clock = 0x11;
+static const uint8_t ID_DAP_SWJ_Sequence = 0x12;
+static const uint8_t DAP_OK = 0x00;
+static const uint8_t DAP_PORT_SWD = 0x01;
+static const uint8_t DAP_TRANSFER_OK = 0x01;
+static const uint8_t DAP_TRANSFER_WAIT = 0x02;
+static const uint8_t DAP_TRANSFER_FAULT = 0x04;
+static const uint8_t DAP_TRANSFER_ERROR = 0x08;
+static const uint8_t DAP_TRANSFER_MISMATCH = 0x10;
+static const uint8_t DAP_SWJ_nRESET = 7; // bit number in DAP_SWJ_Pins
 
 // DAP_Transfer request bits
 static const uint8_t REQ_APnDP = 0x01;
@@ -94,7 +111,8 @@ bool Adafruit_DAP_CH32::begin(int swclk, int swdio, int nreset) {
     }
   }
 
-  DAP_Setup(); // pins high-Z, nRESET released
+  dap_ch32_serial_string(dap_ch32_serial);
+  dap_init(swclk, swdio, nreset); // pins high-Z, nRESET released
 
   _ready = true;
   _error = OK;
@@ -149,10 +167,12 @@ bool Adafruit_DAP_CH32::setIdleCycles(uint8_t cycles) {
  * @brief Run one raw CMSIS-DAP command.
  * @param request Command packet.
  * @param response Response buffer (64 bytes).
- * @return Response length in bytes.
+ * @return Response length in bytes (always a whole 64-byte packet).
  */
 uint32_t Adafruit_DAP_CH32::execute(const uint8_t *request, uint8_t *response) {
-  return DAP_ExecuteCommand(request, response) & 0xFFFFU;
+  // The engine does not report the response length: whole packets.
+  dap_process_request(const_cast<uint8_t *>(request), response);
+  return sizeof(_resp);
 }
 
 /*!
@@ -232,33 +252,23 @@ bool Adafruit_DAP_CH32::setClock(uint32_t hz) {
 
 /*!
  * @brief Measure the actual SWCLK frequency over 16384 clocks.
- * @param read_path False to time output bits, true to time input bits.
  * @return Frequency in Hz, or 0 on error. The target needs connect() after.
  */
-uint32_t Adafruit_DAP_CH32::measureClock(bool read_path) {
+uint32_t Adafruit_DAP_CH32::measureClock(void) {
   if (!checkReady() || !connectPort()) {
     return 0;
   }
-  // Output: all ones (a long line reset). Input: SWDIO left to the pull-up.
-  uint8_t ones[32];
-  memset(ones, 0xFF, sizeof(ones));
-  uint8_t in[8];
-  const uint32_t bits = 16384;
+  // 128 one bits per command: a long line reset, harmless to the target.
+  _req[0] = ID_DAP_SWJ_Sequence;
+  _req[1] = 128;
+  memset(&_req[2], 0xFF, 16);
+  const uint32_t commands = 128;
   uint32_t t0 = dap_ch32_micros();
-  if (!read_path) {
-    for (uint32_t i = 0; i < bits / 256; i++) {
-      SWJ_Sequence(256, ones);
-    }
-  } else {
-    PIN_SWDIO_OUT_DISABLE();
-    for (uint32_t i = 0; i < bits / 64; i++) {
-      SWD_Sequence(SWD_SEQUENCE_DIN | 0U, nullptr, in); // 0 = 64 clocks
-    }
-    PIN_SWDIO_OUT_ENABLE();
-    PIN_SWDIO_OUT(1U);
+  for (uint32_t i = 0; i < commands; i++) {
+    execute(_req, _resp);
   }
   uint32_t dt = dap_ch32_micros() - t0;
-  return dt ? (uint32_t)((uint64_t)bits * 1000000ULL / dt) : 0;
+  return dt ? (uint32_t)((uint64_t)commands * 128U * 1000000ULL / dt) : 0;
 }
 
 /*!

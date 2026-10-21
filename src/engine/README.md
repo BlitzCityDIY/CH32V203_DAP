@@ -1,22 +1,19 @@
 # CMSIS-DAP engine
 
-`DAP.c`, `SW_DP.c`, `DAP_vendor.c` and `DAP.h` are ARM's CMSIS-DAP firmware
-v2.1.2 (Apache-2.0, see `LICENSE-Apache-2.0.txt`), taken from
-https://github.com/ARM-software/CMSIS-DAP at commit `12636590eec66fae2d1bba4518749426ad5a4595`.
+`dap.cpp` and `dap.h` are the free-dap based CMSIS-DAP engine from
+[Adafruit_DAP](https://github.com/adafruit/Adafruit_DAP) (BSD-3, Copyright
+(c) 2013-2017 Alex Taradov, Adafruit), unmodified except for lines marked
+`CH32:`:
 
-## Modifications to ARM's files
+- `DAP_CONFIG_PERFORMANCE_ATTR` on the six SWD bit-bang functions, to place
+  them in the CH32V203's zero-wait flash
+- `DAP_SWJ_Pins`: the wait is in microseconds (was multiplied by 1000)
+- `DAP_SWJ_Clock`: the request is in Hz, converted to the engine's delay
+  count with `DAP_CONFIG_CLOCK_DELAY()`
 
-- **DAP.h**: added a `__riscv` branch to `PIN_DELAY_SLOW()` with a RISC-V
-  delay loop. 
-- **SW_DP.c**: added `DAP_FAST_CODE` to `SWJ_Sequence`, `SWD_Sequence`,
-  `SWD_Transfer` and the `SWD_TransferFast/Slow` functions. On the CH32V203G6,
-  code above the first 32 KB of flash runs about 2.4x slower, so the
-  bit-banging code is pinned to the start of flash for consistent SWD timing.
+`dap_config.h`, `dap_ch32_platform.h` and `dap_config_ch32.c` are the CH32V203
+port (MIT).
 
-## CH32-specific files (MIT)
-
-- `DAP_config.h`: hardware configuration. Follows ARM's template; the CH32
-  GPIO handling is based on XIVN1987/DAPLink's CH32V203 port (MIT), changed to
-  runtime-selectable pins.
-- `dap_config_ch32.c`: runtime pin state, pin-mode helper, serial number.
-- `cmsis_compiler.h`: CMSIS macros the WCH headers don't provide.
+Not implemented by this engine: DAP_SWD_Sequence, DAP_Queue/ExecuteCommands,
+SWO and UART commands. DAP_SWJ_Sequence with a bit count of 0 sends nothing
+(CMSIS-DAP: 256 bits).
