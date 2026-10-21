@@ -1,18 +1,20 @@
 /*!
  * @file dap_config_ch32.c
  *
- * Runtime pin state and platform functions for DAP_config.h.
+ * Runtime pin state and platform functions for the free-dap CH32 port.
  *
  */
 
-#include "DAP_config.h"
+#include "dap_ch32_platform.h"
+
+#include <string.h>
 
 #ifndef DAP_CH32_HOST_SIM
 /// @cond
 extern uint32_t millis(void); // Arduino core (C linkage)
 /// @endcond
 
-/*!
+/*
  * @brief Monotonic microsecond timer.
  *
  * The core's micros() assumes SysTick counts down, but it counts up, so
@@ -40,8 +42,34 @@ uint32_t dap_ch32_micros(void) {
 #endif
 
 dap_ch32_pins_t dap_ch32_pins; //!< pins used by the engine
+char dap_ch32_serial[26];      //!< serial number string
 
-/*!
+// SWD clock model, per half SWCLK period: fixed cycles plus cycles per
+// delay-loop iteration. Measured (write path, 144 MHz): 56.2 + 5.06 * n.
+// Rounded so the clock stays at or below the request (CMSIS-DAP clocks are
+// upper limits): 52 also leaves margin for a cheaper read path. See README.
+#define HALF_PERIOD_OVERHEAD 52U //!< fixed cycles per half period
+#define DELAY_LOOP_CYCLES 5U     //!< cycles per delay-loop iteration
+
+/*
+ * @brief free-dap delay-loop count for an SWD clock (rounded so SWCLK does
+ *        not exceed the request).
+ * @param hz SWD clock in Hz.
+ * @return Delay count (0 = fastest).
+ */
+int dap_ch32_clock_delay(uint32_t hz) {
+  if (hz == 0) {
+    hz = 1;
+  }
+  uint32_t half = SystemCoreClock / 2U / hz;
+  if (half <= HALF_PERIOD_OVERHEAD) {
+    return 0;
+  }
+  return (int)((half - HALF_PERIOD_OVERHEAD + DELAY_LOOP_CYCLES - 1U) /
+               DELAY_LOOP_CYCLES);
+}
+
+/*
  * @brief Set one pin's 4-bit mode field in CFGLR or CFGHR (setup only).
  * @param port GPIO port.
  * @param mask Pin mask.
@@ -54,7 +82,7 @@ void dap_ch32_pin_config(GPIO_TypeDef *port, uint32_t mask, uint32_t cfg) {
   *reg = (*reg & ~(0xFU << shift)) | (cfg << shift);
 }
 
-/*!
+/*
  * @brief Serial number: the 96-bit chip unique ID as 24 hex digits.
  * @param str Receives the string (at least 26 bytes).
  * @return Length including the terminating NUL.
