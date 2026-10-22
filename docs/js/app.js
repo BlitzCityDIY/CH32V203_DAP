@@ -143,6 +143,10 @@ async function run(messageId, fn) {
       setMessage(messageId, text, e instanceof CancelledError ? 'warn' : 'error');
       log(text, e instanceof CancelledError ? 'warn' : 'error');
     }
+    if (e && e.history) {
+      log('Last CMSIS-DAP commands before the error (time since the previous one, request -> response):', 'warn');
+      for (const line of e.history) log(line, 'warn');
+    }
     if (e instanceof SwdError && e.code === 'USB' && state.dap && !state.dap.opened) {
       probeLost('Lost contact with the QT Py. Unplug it, plug it back in and connect again.');
     } else if (state.dap && !(e instanceof FirmwareError) && !(e instanceof CancelledError)) {

@@ -81,6 +81,16 @@ function transferError(resp) {
   return new SwdError('NO_ACK');
 }
 
+const CMD_NAMES = {
+  0x00: 'Info', 0x02: 'Connect', 0x03: 'Disconnect', 0x04: 'TransferConfigure',
+  0x05: 'Transfer', 0x06: 'TransferBlock', 0x10: 'SWJ_Pins', 0x11: 'SWJ_Clock',
+  0x12: 'SWJ_Sequence',
+};
+const HISTORY_LENGTH = 16;
+
+const hexBytes = (b, max) => Array.from(b.slice(0, max), (x) => x.toString(16).padStart(2, '0')).join(' ') +
+  (b.length > max ? ' …(' + b.length + ' bytes)' : '');
+
 function withTimeout(promise, ms, onTimeout) {
   let timer;
   return Promise.race([
@@ -123,6 +133,22 @@ export class WebUsbDap {
     this.opened = false;
     this._queue = Promise.resolve();
     this._ifaceNumber = -1;
+    this.history = []; // last commands and responses, for error reports
+  }
+
+  /** The last commands and responses, oldest first, one line each. */
+  describeHistory() {
+    return this.history.map((h, i) => {
+      const dt = i ? h.t - this.history[i - 1].t : 0;
+      return ('+' + dt.toFixed(1) + ' ms').padStart(10) + '  ' +
+        (CMD_NAMES[h.req[0]] || '0x' + h.req[0].toString(16)).padEnd(17) +
+        hexBytes(h.req, 20) + '  ->  ' + (h.resp ? hexBytes(h.resp, 12) : '(no response)');
+    });
+  }
+
+  _record(req, resp) {
+    this.history.push({ t: performance.now(), req, resp });
+    if (this.history.length > HISTORY_LENGTH) this.history.shift();
   }
 
   static get supported() {
@@ -219,7 +245,10 @@ export class WebUsbDap {
         }
         if (result.status !== 'ok') throw new SwdError('USB', 'USB read status: ' + result.status);
         const data = new Uint8Array(result.data.buffer, result.data.byteOffset, result.data.byteLength);
-        if (data.length && data[0] === out[0]) return data;
+        if (data.length && data[0] === out[0]) {
+          this._record(out, data.slice());
+          return data;
+        }
       }
       throw new SwdError('USB', 'Probe responses are out of sync. Unplug the QT Py and plug it back in.');
     };
@@ -321,7 +350,9 @@ export class WebUsbDap {
     const r = await this.command(Uint8Array.from(req));
     const done = r[1], resp = r[2];
     if (done !== ops.length || (resp & 0x07) !== ACK_OK || (resp & (RESP_ERROR | RESP_MISMATCH))) {
-      throw transferError(resp);
+      const e = transferError(resp);
+      e.history = this.describeHistory();
+      throw e;
     }
     const values = [];
     for (let i = 0; i < reads; i++) values.push(get32(r, 3 + i * 4));
@@ -351,7 +382,9 @@ export class WebUsbDap {
     const r = await this.command(req);
     const done = r[1] | (r[2] << 8), resp = r[3];
     if (done !== words || (resp & 0x07) !== ACK_OK || (resp & RESP_ERROR)) {
-      throw transferError(resp);
+      const e = transferError(resp);
+      e.history = this.describeHistory();
+      throw e;
     }
     return write ? null : r.slice(4, 4 + words * 4);
   }
