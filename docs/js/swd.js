@@ -36,7 +36,10 @@ export class SwdTarget {
   constructor(dap) {
     this.dap = dap;
     this.clockHz = 1000000; // the QT Py caps host requests at 1 MHz by default
-    this.idleCycles = 2;    // an STM32F4 needs at least 2 (see the library README)
+    // Idle cycles after each transfer. An STM32F4 needs at least 2; 32 (about
+    // 34 us at 1 MHz) also lets it finish programming a flash word (16 us
+    // typical) before the next request, so it answers OK instead of WAIT.
+    this.idleCycles = 32;
     this.dpidr = 0;
     this._invalidate();
   }
